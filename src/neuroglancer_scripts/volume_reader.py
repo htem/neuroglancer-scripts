@@ -5,7 +5,7 @@
 
 import json
 import logging
-
+import h5py
 import numpy as np
 import nibabel
 import nibabel.orientations
@@ -278,51 +278,127 @@ def nibabel_image_to_precomputed(img,
     volume_to_precomputed(precomputed_writer, volume,
                           chunk_transformer=chunk_transformer)
 
+def h5py_file_to_precomputed(img,dset_name, precomputed_writer, load_full_volume = True):
+    shape = img[dset_name].shape
+
+    zero_index = tuple(0 for _ in shape)
+    input_dtype = img[dset_name].dtype
+
+    voxel_sizes = img[dset_name].attrs['resolution']
+
+    info = precomputed_writer.info
+
+    output_dtype = np.dtype(info["data_type"])
+    info_voxel_sizes = 0.000001 * np.asarray(info["scales"][0]["resolution"])
+    if not np.allclose(voxel_sizes, info_voxel_sizes):
+        logger.warning("voxel size is inconsistent with resolution in the "
+                       "info file(%s nm)", info_voxel_sizes)
+
+    if not np.can_cast(input_dtype, output_dtype, casting="safe"):
+        logger.warning("The volume has data type %s, but chunks will be "
+                       "saved with %s. You should make sure that the cast "
+                       "does not lose range/accuracy.",
+                       input_dtype.name, output_dtype.name)
+
+    # Scaling according to --input-min and --input-max. We modify the
+    # slope/inter values used by Nibabel rather than re-implementing
+    # post-scaling of the read data, in order to benefit from the clever
+    # handling of data types by Nibabel
+    if np.issubdtype(output_dtype, np.integer):
+        output_min = np.iinfo(output_dtype).min
+        output_max = np.iinfo(output_dtype).max
+    else:
+        output_min = 0.0
+        output_max = 1.0
+
+    # Transformations applied to the voxel values
+    chunk_transformer = (
+        neuroglancer_scripts.data_types.get_chunk_dtype_transformer(
+            input_dtype, output_dtype
+        )
+    )
+    if load_full_volume:
+        logger.info("Loading full volume to memory... ")
+        volume = img[dset_name][:]
+    else:
+        volume = img[dset_name]
+    logger.info("Writing chunks... ")
+    volume_to_precomputed(precomputed_writer, volume,
+                          chunk_transformer=chunk_transformer)
+
+
+
+
 
 def volume_file_to_precomputed(volume_filename,
                                dest_url,
+                               dset_name,
                                ignore_scaling=False,
                                input_min=None,
                                input_max=None,
                                load_full_volume=True,
                                options={}):
-    img = nibabel.load(volume_filename)
-    accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
-        dest_url, options
-    )
     try:
-        precomputed_writer = precomputed_io.get_IO_for_existing_dataset(
-            accessor
+        img = nibabel.load(volume_filename)
+        accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
+            dest_url, options
         )
-    except neuroglancer_scripts.accessor.DataAccessError as exc:
-        logger.error("No 'info' file was found (%s). You can generate one by "
-                     "running this program with the --generate-info option, "
-                     "then using generate_scales_info.py on the result",
-                     exc)
-        return 1
-    except ValueError as exc:  # TODO use specific exception for invalid JSON
-        logger.error("Invalid 'info' file: %s", exc)
-        return 1
-    return nibabel_image_to_precomputed(img, precomputed_writer,
-                                        ignore_scaling, input_min, input_max,
-                                        load_full_volume, options)
+        print(img)
+        try:
+            precomputed_writer = precomputed_io.get_IO_for_existing_dataset(
+                accessor
+            )
+        except neuroglancer_scripts.accessor.DataAccessError as exc:
+            logger.error("No 'info' file was found (%s). You can generate one by "
+                         "running this program with the --generate-info option, "
+                         "then using generate_scales_info.py on the result",
+                         exc)
+            return 1
+        except ValueError as exc:  # TODO use specific exception for invalid JSON
+            logger.error("Invalid 'info' file: %s", exc)
+            return 1
+        return nibabel_image_to_precomputed(img, precomputed_writer,
+                                            ignore_scaling, input_min, input_max,
+                                            load_full_volume, options)
+    except:
+        img = h5py.File(volume_filename,'r')
+        accessor = neuroglancer_scripts.accessor.get_accessor_for_url( dest_url, options )
+        try:
+            precomputed_writer = precomputed_io.get_IO_for_existing_dataset(
+                accessor
+            )
+        except neuroglancer_scripts.accessor.DataAccessError as exc:
+            logger.error("No 'info' file was found (%s). You can generate one by "
+                         "running this program with the --generate-info option, "
+                         "then using generate_scales_info.py on the result",
+                         exc)
+            return 1
+        except ValueError as exc:  # TODO use specific exception for invalid JSON
+            logger.error("Invalid 'info' file: %s", exc)
+            return 1
+        return h5py_file_to_precomputed(img,dset_name, precomputed_writer,
+                                            load_full_volume)
 
 
-def volume_file_to_info(volume_filename, dest_url,
+def volume_file_to_info(volume_filename, dest_url,dset_name,
                         ignore_scaling=False,
                         input_min=None,
                         input_max=None,
                         options={}):
-    img = nibabel.load(volume_filename)
-    accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
-        dest_url,
-        accessor_options=options
-    )
-    return store_nibabel_image_to_fullres_info(
-        img,
-        accessor,
-        ignore_scaling=ignore_scaling,
-        input_min=input_min,
-        input_max=input_max,
-        options=options
-    )
+    try:
+        img = nibabel.load(volume_filename)
+        accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
+            dest_url,
+            accessor_options=options
+        )
+        return store_nibabel_image_to_fullres_info(
+            img,
+            accessor,
+            ignore_scaling=ignore_scaling,
+            input_min=input_min,
+            input_max=input_max,
+            options=options
+        )
+    except:
+        img = h5py.File(volume_filename,'r')
+        raise ValueError("Not impl yet")

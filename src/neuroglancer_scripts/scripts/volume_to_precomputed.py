@@ -29,7 +29,7 @@ omitted, it is assumed to be zero.
                         help="source Nifti file containing the data")
     parser.add_argument("dest_url", help="directory/URL where the converted "
                         "dataset will be written")
-
+    parser.add_argument("--dset_name",default=None,help="name of dataset if using hdf5")
     parser.add_argument("--generate-info", action="store_true",
                         help="generate an 'info_fullres.json' file containing "
                         "the metadata read for this volume, then exit")
@@ -88,6 +88,7 @@ def main(argv=sys.argv):
         return neuroglancer_scripts.volume_reader.volume_file_to_precomputed(
             args.volume_filename,
             args.dest_url,
+            args.dset_name,
             ignore_scaling=args.ignore_scaling,
             input_min=args.input_min,
             input_max=args.input_max,
