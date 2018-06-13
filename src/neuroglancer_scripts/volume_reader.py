@@ -24,6 +24,91 @@ logger = logging.getLogger(__name__)
 # TODO turn return codes into exceptions
 #
 # TODO factor out redundant code with nibabel_image_to_precomputed
+
+
+def store_h5py_image_to_fullres_info(img, dset_name, accessor, ignore_scaling=False,input_min=None,input_max=None,options={}):
+    formatted_info, input_dtype, imperfect_dtype = (
+        h5py_image_to_info(
+            img,
+            dset_name,
+            ignore_scaling=ignore_scaling,
+            input_min=input_min,
+            input_max=input_max,
+            options=options
+        ))
+    try:
+        accessor.store_file("info_fullres.json",
+                            formatted_info.encode("utf-8"),
+                            mime_type="application/json")
+    except DataAccessError as exc:
+        logger.critical("cannot write info_fullres.json: %s", exc)
+        return 1
+    logger.info("The metadata above was written to info_fullres.json. "
+                "Please run generate-scales-info on that file "
+                "to generate the 'info' file, then run this program "
+                "again.")
+    return 4 if imperfect_dtype else 0
+
+def h5py_image_to_info(img,dset_name,
+                          ignore_scaling=False,
+                          input_min=None,
+                          input_max=None,
+                          options={}):
+    shape = img[dset_name].shape
+
+    if input_max is not None:
+        # In case scaling is used, usually the result will be provided by
+        # nibabel as float64
+        input_dtype = np.dtype(np.float64)
+    else:
+        # There is no guarantee that proxy.dtype exists, so we have to
+        # read a value from the file to see the result of the scaling
+        zero_index = tuple(0 for _ in shape)
+        input_dtype = img[dset_name][zero_index].dtype
+
+    logger.info("Input image shape is %s", shape)
+    voxel_sizes = img[dset_name].attrs['resolution']
+    logger.info("Input voxel size is %s nm", voxel_sizes)
+
+    if input_dtype.name in neuroglancer_scripts.data_types.NG_DATA_TYPES:
+        guessed_dtype = input_dtype.name
+    else:
+        guessed_dtype = "float32"
+    formatted_info = """\
+{{
+    "type": "{im_type}",
+    "num_channels": {num_channels},
+    "data_type": "{data_type}",
+    "scales": [
+        {{
+            "encoding": "raw",
+            "size": {size},
+            "resolution": {resolution},
+            "voxel_offset": [0, 0, 0]
+        }}
+    ]
+}}""".format(im_type=input_dtype == np.uint64 ? "segmentation" : "image",num_channels=shape[3] if len(shape) >= 4 else 1,
+             data_type=guessed_dtype,
+             size=list(shape[:3]),
+             resolution= [v for v in voxel_sizes[:3]])
+
+    info = json.loads(formatted_info)  # ensure well-formed JSON
+    logger.info("the following info has been generated:\n%s", formatted_info)
+
+    imperfect_dtype = (input_dtype.name
+                       not in neuroglancer_scripts.data_types.NG_DATA_TYPES)
+    if imperfect_dtype:
+        logger.warn("The %s data type is not supported by Neuroglancer. "
+                    "float32 was set, please adjust if needed "
+                    "(data_type must be one of %s). The values will be "
+                    "rounded (if targeting an integer type) and cast "
+                    "during the conversion.",
+                    input_dtype.name,
+                    neuroglancer_scripts.data_types.NG_DATA_TYPES)
+    return formatted_info, input_dtype, imperfect_dtype
+
+
+
 def store_nibabel_image_to_fullres_info(img,
                                         accessor,
                                         ignore_scaling=False,
@@ -332,13 +417,13 @@ def h5py_file_to_precomputed(img,dset_name, precomputed_writer, load_full_volume
 
 def volume_file_to_precomputed(volume_filename,
                                dest_url,
-                               dset_name,
+                               dset_name=None,
                                ignore_scaling=False,
                                input_min=None,
                                input_max=None,
                                load_full_volume=True,
                                options={}):
-    try:
+    if dset_name is None:
         img = nibabel.load(volume_filename)
         accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
             dest_url, options
@@ -360,7 +445,7 @@ def volume_file_to_precomputed(volume_filename,
         return nibabel_image_to_precomputed(img, precomputed_writer,
                                             ignore_scaling, input_min, input_max,
                                             load_full_volume, options)
-    except:
+    else:
         img = h5py.File(volume_filename,'r')
         accessor = neuroglancer_scripts.accessor.get_accessor_for_url( dest_url, options )
         try:
@@ -385,7 +470,7 @@ def volume_file_to_info(volume_filename, dest_url,dset_name,
                         input_min=None,
                         input_max=None,
                         options={}):
-    try:
+    if dset_name is None:
         img = nibabel.load(volume_filename)
         accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
             dest_url,
@@ -399,6 +484,19 @@ def volume_file_to_info(volume_filename, dest_url,dset_name,
             input_max=input_max,
             options=options
         )
-    except:
+    else:
         img = h5py.File(volume_filename,'r')
-        raise ValueError("Not impl yet")
+        accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
+            dest_url,
+            accessor_options=options
+        )
+        return store_h5py_image_to_fullres_info(
+            img,
+			dset_name,
+            accessor,
+            ignore_scaling=ignore_scaling,
+            input_min=input_min,
+            input_max=input_max,
+            options=options
+        )
+

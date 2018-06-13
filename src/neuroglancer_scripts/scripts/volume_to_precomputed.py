@@ -39,7 +39,7 @@ omitted, it is assumed to be zero.
                        help="read the values as stored on disk, without "
                        "applying the data scaling (slope/intercept) from the "
                        "volume header")
-    group.add_argument("--load-full-volume", action="store_true", default=True,
+    group.add_argument("--load-full-volume", action="store_false", default=True,
                        help=argparse.SUPPRESS)
     group.add_argument("--mmap", dest="load_full_volume", action="store_false",
                        help="use memory-mapping to avoid loading the full "
@@ -79,6 +79,7 @@ def main(argv=sys.argv):
         return neuroglancer_scripts.volume_reader.volume_file_to_info(
             args.volume_filename,
             args.dest_url,
+			args.dset_name,
             ignore_scaling=args.ignore_scaling,
             input_min=args.input_min,
             input_max=args.input_max,
