@@ -41,7 +41,8 @@ def mesh_file_to_precomputed(input_filename, output_filename,
         triangles = np.flip(triangles, axis=1)
 
     # Gifti uses millimetres, Neuroglancer expects nanometres
-    points *= 1e6
+    points = points.copy()
+    points *= 40
 
     # TODO use Accessor
     with gzip.open(output_filename + ".gz", "wb") as output_file:

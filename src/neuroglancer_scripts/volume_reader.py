@@ -2,10 +2,11 @@
 # Author: Yann Leprince <y.leprince@fz-juelich.de>
 #
 # This software is made available under the MIT licence, see LICENCE.txt.
-
+import os
 import json
 import logging
 import h5py
+import zarr
 import numpy as np
 import nibabel
 import nibabel.orientations
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 # TODO factor out redundant code with nibabel_image_to_precomputed
 
 
-def store_h5py_image_to_fullres_info(img, dset_name, accessor, ignore_scaling=False,input_min=None,input_max=None,options={}):
+def store_h5py_image_to_fullres_info(img, dset_name, accessor, ignore_scaling=False,input_min=None,input_max=None,cutout=None, options={}):
     formatted_info, input_dtype, imperfect_dtype = (
         h5py_image_to_info(
             img,
@@ -67,6 +68,7 @@ def h5py_image_to_info(img,dset_name,
         input_dtype = img[dset_name][zero_index].dtype
 
     logger.info("Input image shape is %s", shape)
+    print("img %s dset_name %s"%(img, dset_name))
     voxel_sizes = img[dset_name].attrs['resolution']
     logger.info("Input voxel size is %s nm", voxel_sizes)
 
@@ -87,9 +89,9 @@ def h5py_image_to_info(img,dset_name,
             "voxel_offset": [0, 0, 0]
         }}
     ]
-}}""".format(im_type=input_dtype == np.uint64 ? "segmentation" : "image",num_channels=shape[3] if len(shape) >= 4 else 1,
+}}""".format(im_type= "segmentation" if input_dtype == np.uint64 else "image",num_channels=shape[0] if len(shape) >= 4 else 1,
              data_type=guessed_dtype,
-             size=list(shape[:3]),
+             size=list(shape[-3:]),
              resolution= [v for v in voxel_sizes[:3]])
 
     info = json.loads(formatted_info)  # ensure well-formed JSON
@@ -238,9 +240,9 @@ def volume_to_precomputed(pyramid_writer, volume, chunk_transformer=None):
     num_channels = info["num_channels"]
 
     # Volumes given by nibabel are using Fortran indexing (X, Y, Z, T)
-    assert volume.shape[:3] == tuple(size)
+    #assert volume.shape[:3] == tuple(size)
     if len(volume.shape) > 3:
-        assert volume.shape[3] == num_channels
+        assert volume.shape[0] == num_channels
 
     progress_bar = tqdm(
         total=(((size[0] - 1) // chunk_size[0] + 1)
@@ -263,7 +265,8 @@ def volume_to_precomputed(pyramid_writer, volume, chunk_transformer=None):
                     : min(chunk_size[0] * (x_chunk_idx + 1), size[0])
                 ]
                 if len(volume.shape) == 4:
-                    chunk = volume[x_slicing, y_slicing, z_slicing, :]
+                    chunk = volume[:,x_slicing, y_slicing, z_slicing]
+                    chunk = chunk.swapaxes(0,1).swapaxes(1,2).swapaxes(2,3)
                 elif len(volume.shape) == 3:
                     chunk = volume[x_slicing, y_slicing, z_slicing]
                     chunk = chunk[..., np.newaxis]
@@ -446,7 +449,10 @@ def volume_file_to_precomputed(volume_filename,
                                             ignore_scaling, input_min, input_max,
                                             load_full_volume, options)
     else:
-        img = h5py.File(volume_filename,'r')
+        if ( os.path.splitext(volume_filename)[-1] == ".zarr"):
+            img = zarr.open_group(volume_filename,'r')
+        else:
+            img = h5py.File(volume_filename,'r')
         accessor = neuroglancer_scripts.accessor.get_accessor_for_url( dest_url, options )
         try:
             precomputed_writer = precomputed_io.get_IO_for_existing_dataset(
@@ -485,7 +491,11 @@ def volume_file_to_info(volume_filename, dest_url,dset_name,
             options=options
         )
     else:
-        img = h5py.File(volume_filename,'r')
+        if ( os.path.splitext(volume_filename)[-1] == ".zarr"):
+            img = zarr.open_group(volume_filename,'r')
+            print("volume_filename %s"%volume_filename)
+        else:
+            img = h5py.File(volume_filename,'r')
         accessor = neuroglancer_scripts.accessor.get_accessor_for_url(
             dest_url,
             accessor_options=options
@@ -497,6 +507,6 @@ def volume_file_to_info(volume_filename, dest_url,dset_name,
             ignore_scaling=ignore_scaling,
             input_min=input_min,
             input_max=input_max,
-            options=options
+            options=options,
         )
 
